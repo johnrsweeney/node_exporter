@@ -25,6 +25,7 @@ import (
 	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/procfs"
+	"github.com/vishvananda/netns"
 )
 
 type conntrackCollector struct {
@@ -62,52 +63,52 @@ func NewConntrackCollector(logger log.Logger) (Collector, error) {
 		current: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "nf_conntrack_entries"),
 			"Number of currently allocated flow entries for connection tracking.",
-			nil, nil,
+			[]string{"nework_namespace"}, nil,
 		),
 		limit: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "nf_conntrack_entries_limit"),
 			"Maximum size of connection tracking table.",
-			nil, nil,
+			[]string{"nework_namespace"}, nil,
 		),
 		found: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "nf_conntrack_stat_found"),
 			"Number of searched entries which were successful.",
-			nil, nil,
+			[]string{"nework_namespace"}, nil,
 		),
 		invalid: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "nf_conntrack_stat_invalid"),
 			"Number of packets seen which can not be tracked.",
-			nil, nil,
+			[]string{"nework_namespace"}, nil,
 		),
 		ignore: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "nf_conntrack_stat_ignore"),
 			"Number of packets seen which are already connected to a conntrack entry.",
-			nil, nil,
+			[]string{"nework_namespace"}, nil,
 		),
 		insert: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "nf_conntrack_stat_insert"),
 			"Number of entries inserted into the list.",
-			nil, nil,
+			[]string{"nework_namespace"}, nil,
 		),
 		insertFailed: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "nf_conntrack_stat_insert_failed"),
 			"Number of entries for which list insertion was attempted but failed.",
-			nil, nil,
+			[]string{"nework_namespace"}, nil,
 		),
 		drop: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "nf_conntrack_stat_drop"),
 			"Number of packets dropped due to conntrack failure.",
-			nil, nil,
+			[]string{"nework_namespace"}, nil,
 		),
 		earlyDrop: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "nf_conntrack_stat_early_drop"),
 			"Number of dropped conntrack entries to make room for new ones, if maximum table size was reached.",
-			nil, nil,
+			[]string{"nework_namespace"}, nil,
 		),
 		searchRestart: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "nf_conntrack_stat_search_restart"),
 			"Number of conntrack table lookups which had to be restarted due to hashtable resizes.",
-			nil, nil,
+			[]string{"nework_namespace"}, nil,
 		),
 		logger: logger,
 	}, nil
@@ -119,14 +120,14 @@ func (c *conntrackCollector) Update(ch chan<- prometheus.Metric) error {
 		return c.handleErr(err)
 	}
 	ch <- prometheus.MustNewConstMetric(
-		c.current, prometheus.GaugeValue, float64(value))
+		c.current, prometheus.GaugeValue, float64(value), "default")
 
 	value, err = readUintFromFile(procFilePath("sys/net/netfilter/nf_conntrack_max"))
 	if err != nil {
 		return c.handleErr(err)
 	}
 	ch <- prometheus.MustNewConstMetric(
-		c.limit, prometheus.GaugeValue, float64(value))
+		c.limit, prometheus.GaugeValue, float64(value), "default")
 
 	conntrackStats, err := getConntrackStatistics()
 	if err != nil {
@@ -134,21 +135,79 @@ func (c *conntrackCollector) Update(ch chan<- prometheus.Metric) error {
 	}
 
 	ch <- prometheus.MustNewConstMetric(
-		c.found, prometheus.GaugeValue, float64(conntrackStats.found))
+		c.found, prometheus.GaugeValue, float64(conntrackStats.found), "default")
 	ch <- prometheus.MustNewConstMetric(
-		c.invalid, prometheus.GaugeValue, float64(conntrackStats.invalid))
+		c.invalid, prometheus.GaugeValue, float64(conntrackStats.invalid), "default")
 	ch <- prometheus.MustNewConstMetric(
-		c.ignore, prometheus.GaugeValue, float64(conntrackStats.ignore))
+		c.ignore, prometheus.GaugeValue, float64(conntrackStats.ignore), "default")
 	ch <- prometheus.MustNewConstMetric(
-		c.insert, prometheus.GaugeValue, float64(conntrackStats.insert))
+		c.insert, prometheus.GaugeValue, float64(conntrackStats.insert), "default")
 	ch <- prometheus.MustNewConstMetric(
-		c.insertFailed, prometheus.GaugeValue, float64(conntrackStats.insertFailed))
+		c.insertFailed, prometheus.GaugeValue, float64(conntrackStats.insertFailed), "default")
 	ch <- prometheus.MustNewConstMetric(
-		c.drop, prometheus.GaugeValue, float64(conntrackStats.drop))
+		c.drop, prometheus.GaugeValue, float64(conntrackStats.drop), "default")
 	ch <- prometheus.MustNewConstMetric(
-		c.earlyDrop, prometheus.GaugeValue, float64(conntrackStats.earlyDrop))
+		c.earlyDrop, prometheus.GaugeValue, float64(conntrackStats.earlyDrop), "default")
 	ch <- prometheus.MustNewConstMetric(
-		c.searchRestart, prometheus.GaugeValue, float64(conntrackStats.searchRestart))
+		c.searchRestart, prometheus.GaugeValue, float64(conntrackStats.searchRestart), "default")
+
+	// Gather metrics for named namespaces
+	dir, err := os.Open("/var/run/netns/")
+	if err != nil {
+		return c.handleErr(err)
+	}
+	files, err := dir.Readdir(0)
+	if err != nil {
+		return c.handleErr(err)
+	}
+
+	for _, netNamespace := range files {
+		ns, err := netns.GetFromName(netNamespace.Name())
+		if err != nil {
+			return c.handleErr(err)
+		}
+		err = netns.Set(ns)
+		if err != nil {
+			return c.handleErr(err)
+		}
+
+		value, err := readUintFromFile(procFilePath("sys/net/netfilter/nf_conntrack_count"))
+		if err != nil {
+			return c.handleErr(err)
+		}
+		ch <- prometheus.MustNewConstMetric(
+			c.current, prometheus.GaugeValue, float64(value), netNamespace.Name())
+
+		value, err = readUintFromFile(procFilePath("sys/net/netfilter/nf_conntrack_max"))
+		if err != nil {
+			return c.handleErr(err)
+		}
+		ch <- prometheus.MustNewConstMetric(
+			c.limit, prometheus.GaugeValue, float64(value), netNamespace.Name())
+
+		conntrackStats, err := getConntrackStatistics()
+		if err != nil {
+			return c.handleErr(err)
+		}
+
+		ch <- prometheus.MustNewConstMetric(
+			c.found, prometheus.GaugeValue, float64(conntrackStats.found), netNamespace.Name())
+		ch <- prometheus.MustNewConstMetric(
+			c.invalid, prometheus.GaugeValue, float64(conntrackStats.invalid), netNamespace.Name())
+		ch <- prometheus.MustNewConstMetric(
+			c.ignore, prometheus.GaugeValue, float64(conntrackStats.ignore), netNamespace.Name())
+		ch <- prometheus.MustNewConstMetric(
+			c.insert, prometheus.GaugeValue, float64(conntrackStats.insert), netNamespace.Name())
+		ch <- prometheus.MustNewConstMetric(
+			c.insertFailed, prometheus.GaugeValue, float64(conntrackStats.insertFailed), netNamespace.Name())
+		ch <- prometheus.MustNewConstMetric(
+			c.drop, prometheus.GaugeValue, float64(conntrackStats.drop), netNamespace.Name())
+		ch <- prometheus.MustNewConstMetric(
+			c.earlyDrop, prometheus.GaugeValue, float64(conntrackStats.earlyDrop), netNamespace.Name())
+		ch <- prometheus.MustNewConstMetric(
+			c.searchRestart, prometheus.GaugeValue, float64(conntrackStats.searchRestart), netNamespace.Name())
+	}
+
 	return nil
 }
 
