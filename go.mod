@@ -22,7 +22,7 @@ require (
 	github.com/safchain/ethtool v0.2.0
 	github.com/siebenmann/go-kstat v0.0.0-20210513183136-173c9b0a9973 // indirect
 	github.com/soundcloud/go-runit v0.0.0-20150630195641-06ad41a06c4a
-	github.com/vishvananda/netns v0.0.0-20211101163701-50045581ed74 // indirect
+	github.com/vishvananda/netns v0.0.0-20211101163701-50045581ed74
 	golang.org/x/sys v0.0.0-20220330033206-e17cdc41300f
 	gopkg.in/alecthomas/kingpin.v2 v2.2.6
 )
